@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>座位配置圖產生器</title>
+    <!-- 引入 Tailwind CSS 進行快速排版 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 html2canvas 用於截圖匯出 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <style>
+        body {
+            background-color: #f3f4f6;
+            font-family: "Microsoft JhengHei", "PingFang TC", sans-serif;
+        }
+        
+        #capture-area {
+            width: 880px; 
+            margin: 0 auto;
+            background-color: white;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 110px 60px 110px 110px 110px 60px 110px;
+            grid-auto-rows: 60px;
+            gap: 8px 16px;
+            padding: 20px 40px 60px 40px;
+        }
+
+        /* 座位樣式 */
+        .seat {
+            background-color: #ffffff;
+            border: 2px solid #4b5563;
+            border-radius: 4px;
+            display: table-cell;
+            vertical-align: middle;
+            text-align: center;
+            font-size: 15px;
+            line-height: 1.2;
+            cursor: text;
+            transition: all 0.2s;
+            outline: none;
+            box-shadow: 1px 1px 3px rgba(0,0,0,0.1);
+            position: relative;
+            height: 60px;
+            width: 110px;
+            min-height: 56px;
+            box-sizing: border-box;
+        }
+
+        .seat:hover, .seat:focus {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+            z-index: 10;
+        }
+
+        /* 標記公司名稱的樣式 (第一行) */
+        .seat div:first-child {
+            color: #000000;
+            font-size: 13px;
+            /* 移除舊有的 margin-bottom 與 min-height，讓 Flex 自然垂直置中 */
+        }
+        
+        /* 標記人名的樣式 (第二行) */
+        .seat div:nth-child(2) {
+            font-weight: bold;
+            color: #000000;
+            font-size: 15px;
+            /* 移除舊有的 min-height，讓 Flex 自然垂直置中 */
+        }
+
+        /* 會議桌樣式 */
+        .conference-table {
+            background-color: #e5e7eb;
+            border: 2px solid #4b5563;
+            border-radius: 4px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+            z-index: 0;
+        }
+    </style>
+</head>
+<body class="p-8">
+
+    <!-- 控制面板 (不會被截圖) -->
+    <div class="max-w-[1000px] mx-auto mb-6 flex justify-between items-center bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+        <div>
+            <h2 class="text-lg font-bold text-gray-800">🪑 座位配置圖產生器</h2>
+            <p class="text-sm text-gray-500">點擊圖表中的任何文字或座位即可直接編輯。完成後點擊右方按鈕匯出。</p>
+        </div>
+        <div class="flex gap-2">
+            <!-- 隱藏的檔案上傳 input -->
+            <input type="file" id="file-upload" class="hidden" accept=".json" onchange="loadState(event)">
+            
+            <button onclick="document.getElementById('file-upload').click()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded border border-gray-300 transition-colors inline-flex items-center text-sm" title="讀取之前儲存的進度檔">
+                <span>📂 讀取</span>
+            </button>
+            <button onclick="saveState()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded border border-gray-300 transition-colors inline-flex items-center text-sm" title="將目前的文字與顏色存成進度檔">
+                <span>💾 存檔</span>
+            </button>
+            <button id="export-btn" onclick="exportToImage()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded inline-flex items-center transition-colors text-sm">
+                <svg class="fill-current w-4 h-4 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M13 8V2H7v6H2l8 8 8-8h-5zM0 18h20v2H0v-2z"/></svg>
+                <span>📥 匯出圖片</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- 浮動工具列 (當文字反白時出現) -->
+    <div id="floating-toolbar" class="hidden absolute bg-gray-800 shadow-xl border border-gray-600 rounded-lg p-2 flex items-center gap-3 z-50 transform -translate-x-1/2">
+        <div class="flex items-center gap-1">
+            <label class="text-white text-xs font-bold mb-0" for="text-color-picker">顏色:</label>
+            <input type="color" id="text-color-picker" class="w-6 h-6 p-0 border-0 rounded cursor-pointer" title="文字顏色" value="#000000">
+        </div>
+        <div class="w-px h-5 bg-gray-500"></div>
+        <div class="flex items-center gap-1">
+            <label class="text-white text-xs font-bold mb-0" for="text-size-picker">大小:</label>
+            <select id="text-size-picker" class="bg-gray-700 text-white border border-gray-500 rounded text-sm px-1 py-0.5 cursor-pointer outline-none focus:border-blue-400" title="文字大小">
+                <option value="10">10px</option>
+                <option value="11">11px</option>
+                <option value="12">12px</option>
+                <option value="13">13px</option>
+                <option value="14">14px</option>
+                <option value="15">15px</option>
+                <option value="16">16px</option>
+                <option value="18">18px</option>
+                <option value="20">20px</option>
+                <option value="24">24px</option>
+                <option value="28">28px</option>
+                <option value="32">32px</option>
+            </select>
+        </div>
+        <div class="w-px h-5 bg-gray-500"></div>
+        <button id="btn-bold" class="text-white hover:bg-gray-600 px-2 py-0.5 rounded font-bold" title="粗體">B</button>
+    </div>
+
+    <!-- 準備要截圖的區域 -->
+    <div id="capture-area" class="border-2 border-gray-300 relative">
+        <!-- 標題區域 (可編輯) -->
+        <div class="text-center pt-10 pb-4 border-b border-gray-200">
+            <h1 contenteditable="true" class="text-2xl font-bold text-gray-800 outline-none hover:bg-gray-100 p-2 inline-block rounded focus:bg-white focus:ring-2 focus:ring-blue-400">
+                高雄市汽電共生鍋爐脫煤轉型用電需求及供電配套研商會議 - 座位配置圖
+            </h1>
+        </div>
+        
+        <!-- 核心的網格佈局，所有座位都在這裡 -->
+        <div id="layout-grid" class="grid-layout relative">
+            <!-- 4張會議桌 -->
+            <div class="conference-table" style="grid-area: 1 / 2 / span 7 / auto;"></div>
+            <div class="conference-table" style="grid-area: 1 / 6 / span 7 / auto;"></div>
+            <div class="conference-table" style="grid-area: 9 / 2 / span 7 / auto;"></div>
+            <div class="conference-table" style="grid-area: 9 / 6 / span 7 / auto;"></div>
+            <!-- 主席桌 -->
+            <div class="conference-table" style="grid-area: 17 / 2 / auto / span 5; height: 40px; align-self: end; margin: 0 12px;"></div>
+
+            <!-- Row 1 -->
+            <div class="seat" contenteditable="true" style="grid-area: 1 / 1;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 1 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 1 / 5;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 1 / 7;"><div><br></div><div></div></div>
+
+            <!-- Row 2 -->
+            <div class="seat" contenteditable="true" style="grid-area: 2 / 1;"><div>空噪科</div><div>立境郭大源</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 2 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 2 / 5;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 2 / 7;"><div><br></div><div></div></div>
+
+            <!-- Row 3 -->
+            <div class="seat" contenteditable="true" style="grid-area: 3 / 1;"><div>空噪科</div><div>元科公司</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 3 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 3 / 5;"><div>中華紙漿</div><div>方元廷</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 3 / 7;"><div><br></div><div></div></div>
+
+            <!-- Row 4 -->
+            <div class="seat" contenteditable="true" style="grid-area: 4 / 1;"><div>空噪科</div><div>元科公司</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 4 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 4 / 5;"><div>中華紙漿</div><div>王文貴</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 4 / 7;"><div><br></div><div></div></div>
+
+            <!-- Row 5 -->
+            <div class="seat" contenteditable="true" style="grid-area: 5 / 1;"><div>空噪科</div><div>環興公司</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 5 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 5 / 5;"><div>中華紙漿</div><div>侯茂林</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 5 / 7;"><div><br></div><div></div></div>
+
+            <!-- Row 6 -->
+            <div class="seat" contenteditable="true" style="grid-area: 6 / 1;"><div>空噪科</div><div>瑩諮業鈺璽</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 6 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 6 / 5;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 6 / 7;"><div>國喬公司</div><div>劉世昌</div></div>
+
+            <!-- Row 7 -->
+            <div class="seat" contenteditable="true" style="grid-area: 7 / 1;"><div>空噪科</div><div>瑩諮何愷倫</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 7 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 7 / 5;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 7 / 7;"><div>國喬公司</div><div>楊柏毅</div></div>
+
+            <!-- Row 9 -->
+            <div class="seat" contenteditable="true" style="grid-area: 9 / 1;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 9 / 3;"><div>中纖公司</div><div>徐文濱</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 9 / 5;"><div>台苯公司</div><div>高楚昀</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 9 / 7;"><div><br></div><div></div></div>
+
+            <!-- Row 10 -->
+            <div class="seat" contenteditable="true" style="grid-area: 10 / 1;"><div>空噪科</div><div>環興公司</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 10 / 3;"><div>中纖公司</div><div>蕭晉嘉</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 10 / 5;"><div>長春公司</div><div>孫偉力</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 10 / 7;"><div>台塑公司</div><div>羅仁廷</div></div>
+
+            <!-- Row 11 -->
+            <div class="seat" contenteditable="true" style="grid-area: 11 / 1;"><div>空噪科</div><div>環興史美華</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 11 / 3;"><div>中纖公司</div><div>黃東泰</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 11 / 5;"><div>長春公司</div><div>張松文</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 11 / 7;"><div>台塑公司</div><div>林明德</div></div>
+
+            <!-- Row 12 -->
+            <div class="seat" contenteditable="true" style="grid-area: 12 / 1;"><div>空噪科</div><div>元科蔡依如</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 12 / 3;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 12 / 5;"><div><br></div><div></div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 12 / 7;"><div>台塑公司</div><div>黃子能</div></div>
+
+            <!-- Row 13 -->
+            <div class="seat" contenteditable="true" style="grid-area: 13 / 1;"><div>空噪科</div><div>環興鍾有賢</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 13 / 3;"><div>氣變科</div><div>陳秉龍</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 13 / 5;"><div>台電電力調度處</div><div>石欣宜</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 13 / 7;"><div>台塑公司</div><div>何保賜</div></div>
+
+            <!-- Row 14 -->
+            <div class="seat" contenteditable="true" style="grid-area: 14 / 1;"><div>空噪科</div><div>陳技士品伃</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 14 / 3;"><div>氣變科</div><div>莊科長侑霖</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 14 / 5;"><div>台電電源開發處</div><div>詹有智</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 14 / 7;"><div>台塑公司</div><div>李萬文</div></div>
+
+            <!-- Row 15 -->
+            <div class="seat" contenteditable="true" style="grid-area: 15 / 1;"><div>空噪科</div><div>張科長鳳儀</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 15 / 3;"><div>空噪科</div><div>魏技正寬宏</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 15 / 5;"><div>台電系統規劃處</div><div>莊政宏</div></div>
+            <div class="seat" contenteditable="true" style="grid-area: 15 / 7;"><div>台塑公司</div><div>黃建元</div></div>
+
+            <!-- 長官列 (Row 18) -->
+            <div style="grid-area: 18 / 2 / auto / span 5; display: flex; justify-content: center; gap: 20px;">
+                <div class="seat" contenteditable="true" style="width: 150px;"><div><br></div><div>鄭簡任技正嵐</div></div>
+                <div class="seat" contenteditable="true" style="width: 150px;"><div><br></div><div>張局長瑞琿</div></div>
+                <div class="seat" contenteditable="true" style="width: 150px;"><div style="color:transparent">.</div><div>黄副局長世宏</div></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 浮動工具列邏輯 (文字反白時修改樣式) ---
+        const floatingToolbar = document.getElementById('floating-toolbar');
+        const colorPicker = document.getElementById('text-color-picker');
+        const sizePicker = document.getElementById('text-size-picker');
+        const btnBold = document.getElementById('btn-bold');
+        let savedSelection = null;
+
+        function saveSelection() {
+            const sel = window.getSelection();
+            if (sel.getRangeAt && sel.rangeCount) {
+                return sel.getRangeAt(0);
+            }
+            return null;
+        }
+
+        function restoreSelection(range) {
+            if (range) {
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        }
+
+        document.addEventListener('mouseup', (e) => {
+            if (e.target.closest('#floating-toolbar')) return;
+
+            const selection = window.getSelection();
+            const selectedText = selection.toString().trim();
+
+            if (selectedText.length > 0 && e.target.closest('#capture-area')) {
+                savedSelection = saveSelection();
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+
+                floatingToolbar.style.left = `${rect.left + (rect.width / 2) + window.scrollX}px`;
+                floatingToolbar.style.top = `${rect.top + window.scrollY - 50}px`;
+                floatingToolbar.classList.remove('hidden');
+
+                let parentElement = range.commonAncestorContainer;
+                if (parentElement.nodeType === 3) parentElement = parentElement.parentNode;
+                const computedStyle = window.getComputedStyle(parentElement);
+                
+                const rgb = computedStyle.color.match(/\d+/g);
+                if(rgb && rgb.length === 3) {
+                    const hex = '#' + rgb.map(x => parseInt(x).toString(16).padStart(2, '0')).join('');
+                    colorPicker.value = hex;
+                }
+                
+                const sizeStr = parseInt(computedStyle.fontSize);
+                const optionExists = Array.from(sizePicker.options).some(opt => parseInt(opt.value) === sizeStr);
+                if (optionExists) {
+                    sizePicker.value = sizeStr;
+                }
+            } else {
+                floatingToolbar.classList.add('hidden');
+            }
+        });
+
+        floatingToolbar.addEventListener('mousedown', (e) => { e.preventDefault(); });
+
+        colorPicker.addEventListener('input', (e) => {
+            restoreSelection(savedSelection);
+            document.execCommand('styleWithCSS', false, true);
+            document.execCommand('foreColor', false, e.target.value);
+        });
+
+        sizePicker.addEventListener('change', (e) => {
+            restoreSelection(savedSelection);
+            const px = e.target.value;
+            document.execCommand('styleWithCSS', false, true);
+            document.execCommand('fontSize', false, '7'); 
+            
+            const captureArea = document.getElementById('capture-area');
+            const elements = captureArea.querySelectorAll("font[size='7'], span");
+            elements.forEach(el => {
+                if (el.size === '7' || el.style.fontSize.includes('xxx-large') || el.style.fontSize === '48px') {
+                    el.removeAttribute('size');
+                    el.style.fontSize = px + 'px';
+                }
+            });
+        });
+
+        btnBold.addEventListener('click', () => {
+            restoreSelection(savedSelection);
+            document.execCommand('bold', false, null);
+        });
+
+        // --- 匯出圖片的功能 ---
+        function exportToImage() {
+            const captureArea = document.getElementById('capture-area');
+            const exportBtn = document.getElementById('export-btn');
+            
+            const originalText = exportBtn.innerHTML;
+            exportBtn.innerHTML = '<span>⏳ 正在處理中...</span>';
+            exportBtn.disabled = true;
+            exportBtn.classList.add('opacity-75', 'cursor-not-allowed');
+
+            html2canvas(captureArea, {
+                scale: 2, 
+                backgroundColor: '#ffffff',
+                useCORS: true
+            }).then(canvas => {
+                const link = document.createElement('a');
+                const date = new Date();
+                const dateString = `${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}`;
+                
+                link.download = `座位配置圖_${dateString}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+
+                exportBtn.innerHTML = originalText;
+                exportBtn.disabled = false;
+                exportBtn.classList.remove('opacity-75', 'cursor-not-allowed');
+                showToast('✅ 圖片匯出成功！');
+            }).catch(err => {
+                showToast('❌ 匯出圖片時發生錯誤！');
+                console.error(err);
+                exportBtn.innerHTML = originalText;
+                exportBtn.disabled = false;
+                exportBtn.classList.remove('opacity-75', 'cursor-not-allowed');
+            });
+        }
+
+        // --- 儲存與讀取進度功能 ---
+        function saveState() {
+            const layoutGrid = document.getElementById('layout-grid').innerHTML;
+            const titleHTML = document.querySelector('#capture-area h1').innerHTML;
+            
+            const state = {
+                version: 2, // 更新版本號
+                title: titleHTML,
+                content: layoutGrid
+            };
+            
+            const blob = new Blob([JSON.stringify(state)], { type: "application/json" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            
+            const date = new Date();
+            const dateString = `${date.getFullYear()}${(date.getMonth()+1).toString().padStart(2,'0')}${date.getDate().toString().padStart(2,'0')}`;
+            link.download = `座位表進度檔_${dateString}.json`;
+            link.click();
+            showToast('✅ 存檔成功！已下載進度檔。');
+        }
+
+        function loadState(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const state = JSON.parse(e.target.result);
+                    // 支援舊版與新版存檔格式
+                    if (state.version === 1 && state.content) {
+                         document.getElementById('capture-area').innerHTML = state.content;
+                         showToast('✅ 讀取進度成功！');
+                    } else if (state.version === 2 && state.content) {
+                        document.getElementById('layout-grid').innerHTML = state.content;
+                        if(state.title) {
+                            document.querySelector('#capture-area h1').innerHTML = state.title;
+                        }
+                        showToast('✅ 讀取進度成功！');
+                    } else {
+                        showToast('❌ 檔案格式不正確');
+                    }
+                } catch (error) {
+                    showToast('❌ 讀取失敗，請確認是否為正確的進度檔。');
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
+        function showToast(msg) {
+            const toast = document.createElement('div');
+            toast.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-lg shadow-2xl z-50 transition-opacity duration-300 font-bold';
+            toast.innerText = msg;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 2500);
+        }
+    </script>
+</body>
+</html>
